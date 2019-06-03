@@ -1,4 +1,5 @@
 import torch
+import pdb
 
 
 def repackage_hidden(h):
@@ -22,11 +23,35 @@ def batchify(data, bsz, args):
     return data
 
 
+def batchify_sarc(data, bsz, args):
+    eos_pos = (data==2).nonzero().view(-1)
+    parsed_data = []
+    prev_pos = -1
+    for pos in eos_pos:
+        parsed_data += data[prev_pos+1:pos+2],
+        assert(parsed_data[-1][-2] == 2)
+        assert(parsed_data[-1][-1] <= 1)
+        prev_pos = pos+1
+    return parsed_data
+
 def get_batch(source, i, args, seq_len=None, evaluation=False):
     seq_len = min(seq_len if seq_len else args.bptt, len(source) - 1 - i)
     data = source[i:i+seq_len]
     target = source[i+1:i+1+seq_len].view(-1)
+    pdb.set_trace()
     return data, target
+
+def get_sarc_batch(source, i, args, seq_len=None, evaluation=False):
+    if False:
+      seq_len = min(seq_len if seq_len else args.bptt, len(source) - 1 - i)
+      data = source[i:i+seq_len]
+      target = source[i+1:i+1+seq_len].view(-1)
+
+    data = source[i][:-1].view(-1, 1)
+    target = source[i][1:].view(-1)
+    # eos_mask = (data.view(-1) == 2).nonzero()
+    # label_mask = torch.cat([(data == 0).nonzero(), (data == 1).nonzero()])
+    return data.cuda(), target.cuda() #, eos_mask, label_mask
 
 
 def load_embeddings_txt(path):
