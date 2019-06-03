@@ -82,8 +82,10 @@ parser.add_argument('--philly', action='store_true',
 args = parser.parse_args()
 args.tied = True
 
-wandb.init(project="cs224u")
-
+wandb.init(
+    project="cs224u",
+    name=args.save
+)
 
 # Set the random seed manually for reproducibility.
 np.random.seed(args.seed)
@@ -130,16 +132,10 @@ else:
 
 # eval_batch_size = 10
 test_batch_size = 1
-# train_data, train_labels = batchify_sarc(corpus.train, args.batch_size, args)
-# test_data, test_labels = batchify_sarc(corpus.test, test_batch_size, args)
-# train_data = batchify(corpus.train, args.batch_size, args)
-# test_data = batchify(corpus.test, test_batch_size, args)
 train_data = batchify_sarc(corpus.train, args.batch_size, args)
 test_data = batchify_sarc(corpus.test, test_batch_size, args)
 print("# train_data:", len(train_data))
 print("# test_data:", len(test_data))
-# train_labels = batchify(corpus.train_labels, args.batch_size, args)
-# test_labels = batchify(corpus.test_labels, test_batch_size, args)
 
 
 ###############################################################################
@@ -204,9 +200,9 @@ def evaluate(batch_size=1):
     total_loss = 0
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(batch_size)
-    # for i in range(0, data_source.size(0) - 1, args.bptt):
-    indices = list(range(len(data_source)))
+
     n_correct = 0
+    indices = list(range(len(data_source)))
     for i in indices:
         if i%50 == 0:
           print(i)
@@ -241,18 +237,14 @@ def train():
     start_time = time.time()
     ntokens = len(corpus.dictionary)
     hidden = model.init_hidden(args.batch_size)
-    batch, i = 0, 0
+    batch = 0
     indices = list(range(len(train_data)))
     random.shuffle(indices)
-    # while i < train_data.size(0) - 1 - 1:
-    for i in indices:
-        if False:
-          bptt = args.bptt if np.random.random() < 0.95 else args.bptt / 2.
-          # Prevent excessively small or negative sequence lengths
-          seq_len = max(5, int(np.random.normal(bptt, 5)))
-          # There's a very small chance that it could select a very long sequence length resulting in OOM
-          # seq_len = min(seq_len, args.bptt + 10)
 
+    cnt = 0
+    accum_loss = 0
+    for i in indices:
+        cnt += 1
         seq_len = 1
 
         lr2 = optimizer.param_groups[0]['lr']
@@ -260,20 +252,14 @@ def train():
         model.train()
         data, targets = get_sarc_batch(train_data, i, args, seq_len=seq_len)
 
-        # eos_mask = (data.view(-1) == 2).nonzero().view(-1)
-        # label_mask = torch.cat([(data == 0).nonzero(), (data == 1).nonzero()])
-
         # Starting each batch, we detach the hidden state from how it was previously produced.
         # If we didn't, the model would try backpropagating all the way to start of the dataset.
         hidden = repackage_hidden(hidden)
         optimizer.zero_grad()
 
-        # pdb.set_trace()
-
         output, hidden, rnn_hs, dropped_rnn_hs = model(data, hidden, return_h=True)
         # output, hidden = model(data, hidden, return_h=False)
         raw_loss = criterion(model.decoder.weight, model.decoder.bias, output, targets)
-
 
         loss = raw_loss
         
@@ -295,6 +281,12 @@ def train():
                 for rnn_h in rnn_hs[-1:]
             )
         loss.backward()
+        accum_loss += loss.item()
+
+        if cnt % 50 == 0:
+            wandb.log({'LossTrain': accum_loss / 50})
+            cnt = 0
+            accum_loss = 0
 
         # `clip_grad_norm` helps prevent the exploding gradient problem in RNNs / LSTMs.
         if args.clip: torch.nn.utils.clip_grad_norm_(params, args.clip)
@@ -313,7 +305,6 @@ def train():
             start_time = time.time()
         ###
         batch += 1
-        i += seq_len
 
 
 # Loop over epochs.
@@ -332,7 +323,7 @@ try:
         scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, 'min', 0.5, patience=2, threshold=0)
     for epoch in range(1, args.epochs + 1):
         epoch_start_time = time.time()
-        # train()
+        train()
         if 't0' in optimizer.param_groups[0]:
             tmp = {}
             for prm in model.parameters():
@@ -349,7 +340,7 @@ try:
             print('-' * 89)
 
             if val_loss2 < stored_loss:
-                model_save(args.save)
+                model_save(os.path.join('ckpt', args.save))
                 print('Saving Averaged!')
                 stored_loss = val_loss2
 
@@ -379,7 +370,7 @@ try:
             print('-' * 89)
 
             if val_loss < stored_loss:
-                model_save(args.save)
+                model_save(os.path.join('ckpt', args.save))
                 print('Saving model (new best validation)')
                 stored_loss = val_loss
 
@@ -393,7 +384,7 @@ try:
 
             if epoch in args.when:
                 print('Saving model before learning rate decreased')
-                model_save('{}.e{}'.format(args.save, epoch))
+                model_save(os.path.join('ckpt', '{}.e{}'.format(args.save, epoch)))
                 print('Dividing learning rate by 10')
                 optimizer.param_groups[0]['lr'] /= 10.
 
@@ -406,7 +397,7 @@ except KeyboardInterrupt:
     print('Exiting from training early')
 
 # Load the best saved model.
-model_load(args.save)
+model_load(os.path.join('ckpt', args.save))
 
 # Run on test data.
 test_loss = evaluate(test_data, test_batch_size)
